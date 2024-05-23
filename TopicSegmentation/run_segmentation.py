@@ -91,7 +91,7 @@ def main():
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]), allow_extra_keys=True)
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
@@ -134,6 +134,7 @@ def main():
     # 加载数据集
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
+    print("=========================加载数据集=========================")
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(
@@ -157,6 +158,8 @@ def main():
             download_mode=DownloadMode.FORCE_REDOWNLOAD,
             use_auth_token=True if model_args.use_auth_token else None,
         )
+    print(raw_datasets)
+    print("=========================加载数据完成=========================")
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -167,10 +170,14 @@ def main():
     # download model & vocab.
 
     # 加载模型(BARTenc, BERTenc),tokenizer
+    print("=========================加载tokenizer=========================")
     tokenizer = BertTokenizerFast.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         use_fast=model_args.use_fast_tokenizer,
     )
+    print(tokenizer)
+    print("=========================加载tokenizer完成=========================")
+    print("=========================加载model=========================")
     if "bart" in model_args.model_name_or_path.lower():
         model = BartForEncoderCls.from_pretrained(model_args.model_name_or_path,
                                                   num_labels=2,
@@ -187,10 +194,13 @@ def main():
         raise ValueError("Unexpected model.")
     # else:
     #     model = BertForTokenClassification.from_pretrained(model_args.model_name_or_path, num_labels=2)
+    print(model)
+    print("=========================加载model完成=========================")
 
     model.resize_token_embeddings(len(tokenizer))
 
-    # 训练
+    # 训练集
+    print("=========================加载训练集=========================")
     if training_args.do_train:
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
@@ -209,8 +219,11 @@ def main():
                 fn_kwargs={"tokenizer": tokenizer, "max_length": model_args.max_utterance_length},
                 desc="Running tokenizer on train dataset",
             )
+    print(train_dataset)
+    print("=========================加载训练集完成=========================")
 
-    # 评估
+    # evaluation集
+    print("=========================加载evaluation数据集=========================")
     if training_args.do_eval:
         # max_target_length = data_args.val_max_target_length
         if "validation" not in raw_datasets:
@@ -230,8 +243,11 @@ def main():
                 fn_kwargs={"tokenizer": tokenizer, "max_length": model_args.max_utterance_length},
                 desc="Running tokenizer on validation dataset",
             )
+    print(eval_dataset)
+    print("=========================加载evaluation数据完成=========================")
 
-    # 预测
+    # 预测集
+    print("=========================加载predict数据=========================")
     if training_args.do_predict:
         # max_target_length = data_args.val_max_target_length
         if "test" not in raw_datasets:
@@ -251,12 +267,17 @@ def main():
                 fn_kwargs={"tokenizer": tokenizer, "max_length": model_args.max_utterance_length},
                 desc="Running tokenizer on prediction dataset",
             )
+    print(predict_dataset)
+    print("=========================加载predict数据完成=========================")
 
     # Data collator
+    print("=========================加载data collator=========================")
     data_collator = DataCollatorForTokenClassification(
         tokenizer=tokenizer,
         return_tensors="pt"
     )
+    print(data_collator)
+    print("=========================加载data collator完成=========================")
 
     def compute_metrics(eval_preds):
         preds, labels = eval_preds
@@ -284,7 +305,9 @@ def main():
         res = {"f": sum(f_scores)/len(f_scores)}
         return res
 
+
     # Initialize our Trainer
+    print("=========================Trainer=========================")
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -295,8 +318,11 @@ def main():
         callbacks=[],
         compute_metrics=compute_metrics,
     )
+    print(trainer)
+    print("=========================Trainer=========================")
 
     # Training
+    print("=========================Training Start=========================")
     if training_args.do_train:
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
@@ -305,25 +331,26 @@ def main():
             checkpoint = last_checkpoint
         trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model(f"{training_args.output_dir}/best_model")  # Saves the tokenizer too for easy upload
-
-    if training_args.do_predict:
-        logger.info("*** Predict ***")
-
-        predict_results = trainer.predict(
-            predict_dataset, metric_key_prefix="predict"
-        )
-        metrics = predict_results.metrics
-        logger.info(metrics)
-        if trainer.is_world_process_zero():
-            output_prediction_file = os.path.join(
-                training_args.output_dir, f"{model_args.model_name_or_path.replace('/', '_')}_res.txt")
-            predictions = predict_results.predictions[0]
-            labels = predict_results.label_ids
-
-            with open(output_prediction_file, "w", encoding="utf-8") as fw:
-                for pred, label in zip(predictions, labels):
-                    pred = np.argmax(pred, axis=-1)
-                    fw.write(json.dumps({"pred": pred.tolist(), "label": label.tolist()}, ensure_ascii=False) + "\n")
+    print("=========================Training Finished=========================")
+    #
+    # if training_args.do_predict:
+    #     logger.info("*** Predict ***")
+    #
+    #     predict_results = trainer.predict(
+    #         predict_dataset, metric_key_prefix="predict"
+    #     )
+    #     metrics = predict_results.metrics
+    #     logger.info(metrics)
+    #     if trainer.is_world_process_zero():
+    #         output_prediction_file = os.path.join(
+    #             training_args.output_dir, f"{model_args.model_name_or_path.replace('/', '_')}_res.txt")
+    #         predictions = predict_results.predictions[0]
+    #         labels = predict_results.label_ids
+    #
+    #         with open(output_prediction_file, "w", encoding="utf-8") as fw:
+    #             for pred, label in zip(predictions, labels):
+    #                 pred = np.argmax(pred, axis=-1)
+    #                 fw.write(json.dumps({"pred": pred.tolist(), "label": label.tolist()}, ensure_ascii=False) + "\n")
 
 
 def _mp_fn(index):
